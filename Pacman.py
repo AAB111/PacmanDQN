@@ -116,10 +116,12 @@ class Game:
         self.locked_in_timer = 100
         self.locked_in = True
         self.extra_life_given = False
-        self.playtime = 300
+        self.FPS = 15
+        self.playtime = self.FPS * 120
         self.timer_game = 0
+        self.time_end_level = self.timer_game
         self.reward = 'Empty'
-        self.rewards = {'Empty' : -10, #Empty cell
+        self.rewards = {'Empty' : -1, #Empty cell
                         'TicTac' : 3,# Tic-tac
                         'Wall' : -50,#Wall
                         'Wall' : -50,#Ghost safe-zone
@@ -127,15 +129,23 @@ class Game:
                         'BigTicTac' : 50,#Big tic-tac
                         'Win' : 1000,#Win Collected all tic-tac
                         'LoseRound' : -30,#Lose Round
-                        'GameOver' : -100} # GameOver
+                        'GameOver' : -1000} # GameOver
+
+    def newGame(self):
+        global game_board 
+        game_board = copy.deepcopy(original_game_board)
 
     def exponenta(self,x):
         return math.log10(math.exp(x))
 
     def rewardTicTac(self):
-        return self.collected * 10
+        return self.collected * 5
 
     def getReward(self):
+        if self.reward == 'Win':
+            return self.getRewardWin()
+        if self.checkPlaytimeOver():
+            return self.getRewardGameOver()
         if self.pacman.reward == 'Wall':
             return self.rewards[self.pacman.reward]
         if self.reward == 'TicTac' or self.reward == 'BigTicTac':
@@ -152,6 +162,9 @@ class Game:
 
     def step(self,action):
         self.pacman.newDir = action
+        clock = pygame.time.Clock() 
+        clock.tick(self.FPS)
+        time_game = self.timerGame()
         self.update()
         next_state = self.getStateEnv()
         if(self.reward == 'Win' or self.reward == 'GameOver'):
@@ -161,7 +174,13 @@ class Game:
         reward = self.getReward()
         self.reward = 'Empty'
         self.pacman.reward = ''
-        return (next_state,reward,done,self.timerGame())
+        return (next_state,reward,done,time_game)
+
+    def getRewardWin(self):
+        return self.rewards['Win'] * (self.playtime / self.time_end_level)
+
+    def getRewardGameOver(self):
+        return  self.rewards['GameOver'] - (self.rewards['GameOver'] * (self.collected / self.total))
 
     def timerGame(self):
         return float(self.timer_game / self.playtime)
@@ -171,16 +190,10 @@ class Game:
     # Driver method: The games primary update method
     def update(self):
         # pygame.image.unload()
-        if self.game_over:
+        if self.game_over or self.checkPlaytimeOver():
             self.reward = 'GameOver'
             self.gameOverFunc()
             return
-        if self.checkPlaytimeOver():
-            self.game_over = True
-            self.reward = 'GameOver'
-            self.gameOverFunc()
-            self.timer_game = 0
-            return 
         self.level_timer += 1
         self.timer_game += 1
         self.ghost_update_count += 1
@@ -262,6 +275,7 @@ class Game:
         if self.collected == self.total:
             print("New Level")
             self.reward = 'Win'
+            self.time_end_level = self.timer_game
             self.newLevel()
 
         self.softRender()
@@ -474,7 +488,6 @@ class Game:
         pacmanImage = pygame.transform.scale(pacmanImage, (int(square * sprite_ratio), int(square * sprite_ratio)))
         screen.blit(pacmanImage, (self.pacman.col * square + sprite_offset, self.pacman.row * square + sprite_offset, square, square))
         pygame.display.update()
-        self.pause(5000000)
         self.game_over_counter += 1
 
     def displayLives(self):
@@ -570,9 +583,9 @@ class Game:
 
     def getCountPoints(self):
         total = 0
-        for i in range(3, len(game_board) - 2):
-            for j in range(len(game_board[0])):
-                if game_board[i][j] == 2 or game_board[i][j] == 5 or game_board[i][j] == 6:
+        for i in range(3, len(original_game_board) - 2):
+            for j in range(len(original_game_board[0])):
+                if original_game_board[i][j] == 2 or original_game_board[i][j] == 5 or original_game_board[i][j] == 6:
                     total += 1
         return total
 
