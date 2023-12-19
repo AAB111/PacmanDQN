@@ -2,19 +2,18 @@ import pygame
 import math
 from random import randrange
 import random
-import copy,threading
+import copy
 import numpy as np
 board_path = "Assets/BoardImages/"
 element_path = "Assets/ElementImages/"
 text_path = "Assets/TextImages/"
 data_path = "Assets/Data/"
 music_path = "Assets/Music/"
-
+from collections import deque
 pygame.mixer.init()
 pygame.init()
-print(pygame.mixer.music.get_busy())
 
-# 28 Across 31 Tall 1: Empty Space 2: Tic-Tac 3: Wall 4: Ghost safe-space 5: Special Tic-Tac 7: Pacman
+# 28 Across 31 Tall 1: Empty Space 2: Tic-Tac 3: Wall 4: Ghost safe-space 5: Special Tic-Tac 7: Pacman 8:Berry 9: Ghost 10:Ghost attacked
 original_game_board = [
     [3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],
     [3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],
@@ -42,7 +41,7 @@ original_game_board = [
     [3,2,2,2,2,2,2,2,2,2,2,2,2,3,3,2,2,2,2,2,2,2,2,2,2,2,2,3],
     [3,2,3,3,3,3,2,3,3,3,3,3,2,3,3,2,3,3,3,3,3,2,3,3,3,3,2,3],
     [3,2,3,3,3,3,2,3,3,3,3,3,2,3,3,2,3,3,3,3,3,2,3,3,3,3,2,3],
-    [3,6,2,2,3,3,2,2,2,2,2,2,2,7,2,2,2,2,2,2,2,2,3,3,2,2,5,3],
+    [3,6,2,2,3,3,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,3,3,2,2,5,3],
     [3,3,3,2,3,3,2,3,3,2,3,3,3,3,3,3,3,3,2,3,3,2,3,3,2,3,3,3],
     [3,3,3,2,3,3,2,3,3,2,3,3,3,3,3,3,3,3,2,3,3,2,3,3,2,3,3,3],
     [3,2,2,2,2,2,2,3,3,2,2,2,2,3,3,2,2,2,2,3,3,2,2,2,2,2,2,3],
@@ -74,7 +73,7 @@ PLAYING_KEYS = {
 class Game:
     def __init__(self, level, score):
         self.paused = False
-        self.number_states = {'row':36,'col':28}
+        self.state_size = (31,28,4)
         self.ghost_update_delay = 1
         self.ghost_update_count = 0
         self.pacman_update_delay = 1
@@ -85,10 +84,11 @@ class Game:
         self.high_score = self.getHighScore()
         self.score = score
         self.level = level
-        self.lives = 3
-        # self.ghosts = [Ghost(14, 13, "red", 0), Ghost(17, 11, "blue", 1), Ghost(17, 13, "pink", 2), Ghost(17, 15, "orange", 3)]
+        #self.ghosts = [Ghost(14, 13, "red", 0), Ghost(17, 11, "blue", 1), Ghost(17, 13, "pink", 2), Ghost(17, 15, "orange", 3)]
         self.ghosts = []
-        self.pacman = Pacman(26,13) # Center of Second Last Row
+        start_position = self.setStartPositionPacman()
+        self.new_position = start_position
+        self.pacman = Pacman(start_position[0],start_position[1]) # Center of Second Last Row
         self.total = self.getCountPoints()
         self.ghost_score = 200
         self.levels = [[350, 250], [150, 450], [150, 450], [0, 600]]
@@ -112,75 +112,156 @@ class Game:
         self.berries = ["tile080.png", "tile081.png", "tile082.png", "tile083.png", "tile084.png", "tile085.png", "tile086.png", "tile087.png"]
         self.berries_collected = []
         self.level_timer = 0
+        self.clock = pygame.time.Clock() 
         self.berry_score = 100
         self.locked_in_timer = 100
         self.locked_in = True
         self.extra_life_given = False
-        self.FPS = 15
-        self.playtime = self.FPS * 120
+        self.win_streak = 0
+        self.FPS = 60
+        self.count_frame_FPS = 15         
+        self.playtime = self.FPS * self.count_frame_FPS
         self.timer_game = 0
         self.time_end_level = self.timer_game
+        self.count_step_in_emptry = 0
         self.reward = 'Empty'
-        self.rewards = {'Empty' : -1, #Empty cell
-                        'TicTac' : 3,# Tic-tac
-                        'Wall' : -50,#Wall
-                        'Wall' : -50,#Ghost safe-zone
-                        'BigTicTac' : 50,#Big tic-tac
-                        'BigTicTac' : 50,#Big tic-tac
-                        'Win' : 1000,#Win Collected all tic-tac
-                        'LoseRound' : -30,#Lose Round
-                        'GameOver' : -1000} # GameOver
-
-    def newGame(self):
-        global game_board 
-        game_board = copy.deepcopy(original_game_board)
-
-    def exponenta(self,x):
-        return math.log10(math.exp(x))
-
-    def rewardTicTac(self):
-        return self.collected * 5
-
+        self.rewards = {'Empty' : self.getRewardEmpty, #Empty cell
+                        'TicTac' :self.getRewardTicTac,# Tic-tac
+                        'Wall' : self.getRewardWall,#Wall
+                        'BigTicTac' : self.getRewardBigTicTac,#Big tic-tac
+                        'Win' : self.getRewardWin,#Win Collected all tic-tac
+                        'GameOver' : self.getRewardGameOver, #Game over
+                        'Berry':self.getRewardBerry,#Berry
+                        'GhostEated':self.getRewardGhostEated,
+                        'PacmanEated' : self.getRewardPacmanEated,
+                        'NotOneStepBack': self.getRewardNotOneStepBack} # GameOver
+        self.backup_state_env = np.zeros((31,28,4),dtype=int)
+        
+    def setStartPositionPacman(self):
+        positions = np.argwhere(np.asarray(game_board,dtype=int) == 2)
+        random_position = np.random.choice(positions.shape[0])
+        position = positions[random_position]
+        self.new_position = position
+        return position
+    def checkNotOneStepBack(self):
+        return np.array_equal(self.backup_position, self.getStatePacman())
+    def getRewardNotOneStepBack(self):
+        return -60
+    def getRewardWall(self):
+        return -150
+    def getRewardBigTicTac(self):
+        return 35
+    def getRewardTicTac(self):
+        return 25
+    def getRewardBerry(self):
+        return 200
+    def getRewardGhostEated(self):
+        return 300
+    def getRewardPacmanEated(self):
+        return -300 - (-300 * self.time_end_level / self.playtime)
+    def getRewardEmpty(self):
+        return -20
+    def getRewardWin(self):
+        return self.win_streak * 1000 * (self.playtime / self.time_end_level)
+    def getRewardGameOver(self):
+        return  -1000 - (-1000 * (self.collected / self.total))
+    
     def getReward(self):
         if self.reward == 'Win':
-            return self.getRewardWin()
-        if self.checkPlaytimeOver():
-            return self.getRewardGameOver()
+            self.count_step_in_emptry = 0
+            return self.rewards['Win']()
+        if self.reward == 'PacmanEated':
+            self.count_step_in_emptry = 0
+            return self.rewards['PacmanEated']()
+        if self.reward == 'GameOver':
+            self.count_step_in_emptry = 0
+            return self.rewards['GameOver']()
+        if self.reward == 'GhostEated':
+            self.count_step_in_emptry = 0
+            return self.rewards['GhostEated']()
         if self.pacman.reward == 'Wall':
-            return self.rewards[self.pacman.reward]
-        if self.reward == 'TicTac' or self.reward == 'BigTicTac':
-            return self.rewardTicTac()
-        return self.rewards[self.reward]
+            self.count_step_in_emptry += 1
+            return self.rewards['Wall']()
+        if self.reward == 'Berry':
+            self.count_step_in_emptry = 0
+            return self.rewards['Berry']()
+        if self.reward == 'TicTac':
+            self.count_step_in_emptry = 0
+            return self.rewards['TicTac']()
+        if self.reward == 'BigTicTac':
+            self.count_step_in_emptry = 0
+            return self.rewards['BigTicTac']()
+        if self.checkNotOneStepBack():
+            self.count_step_in_emptry += 1
+            return self.rewards['NotOneStepBack']()
+        if self.reward == 'Empty':
+            self.count_step_in_emptry += 1
+            return self.rewards['Empty']()
 
     def getStatePacman(self):
-        row = round(self.pacman.row)
+        row = round(self.pacman.row) - 3 # обрезанный координаты сверху
         col = round(self.pacman.col)
-        return (row,col)
+        return np.array([row,col])
+
+    def round(self,action,digit):
+        match action:
+            case 0:
+                digit_round =  math.ceil(digit)
+            case 1:
+                digit_round = math.floor(digit)
+            case 2:
+                digit_round = math.floor(digit)
+            case 3:
+                digit_round = math.ceil(digit)
+            case _:
+                digit_round = int(digit)
+        return digit_round
+
 
     def getStateEnv(self):
-        return game_board
-
+        iter = 0
+        states = deque()
+        count_frames = 2
+        self.timer_game += 1
+        while iter < count_frames:
+            self.update()
+            self.clock.tick(self.FPS)
+            global game_board
+            copy_game_board = copy.deepcopy(game_board)
+            position_pacman_round = [self.round(self.pacman.newDir,self.pacman.row),self.round(self.pacman.newDir,self.pacman.col)]
+            if position_pacman_round[1] == 28:
+                    position_pacman_round[1] = 0
+            for ghost in self.ghosts:
+                position_ghost_round = [self.round(ghost.dir,ghost.row),self.round(ghost.dir,ghost.col)]
+                if position_ghost_round[1] == 28:
+                    position_ghost_round[1] = 0
+                if ghost.isAttacked():
+                    copy_game_board[position_ghost_round[0]][position_ghost_round[1]] = 10
+                elif not ghost.isAttacked():
+                    copy_game_board[position_ghost_round[0]][position_ghost_round[1]] = 9
+            copy_game_board[position_pacman_round[0]][position_pacman_round[1]] = 7
+            states.append(np.asarray(copy_game_board[3:-2][:]))
+            iter += 1
+        states.appendleft(self.backup_state_env[:,:,2])
+        states.appendleft(self.backup_state_env[:,:,1])
+        states_numpy = np.stack(states,axis=-1)
+        self.backup_state_env = states_numpy
+        return states_numpy
+    
     def step(self,action):
         self.pacman.newDir = action
-        clock = pygame.time.Clock() 
-        clock.tick(self.FPS)
         time_game = self.timerGame()
-        self.update()
+        self.new_position = self.getStatePacman()
         next_state = self.getStateEnv()
-        if(self.reward == 'Win' or self.reward == 'GameOver'):
+        if(self.game_over):
             done = True
         else:
             done = False
         reward = self.getReward()
+        self.backup_position = self.new_position
         self.reward = 'Empty'
         self.pacman.reward = ''
         return (next_state,reward,done,time_game)
-
-    def getRewardWin(self):
-        return self.rewards['Win'] * (self.playtime / self.time_end_level)
-
-    def getRewardGameOver(self):
-        return  self.rewards['GameOver'] - (self.rewards['GameOver'] * (self.collected / self.total))
 
     def timerGame(self):
         return float(self.timer_game / self.playtime)
@@ -190,12 +271,20 @@ class Game:
     # Driver method: The games primary update method
     def update(self):
         # pygame.image.unload()
-        if self.game_over or self.checkPlaytimeOver():
+
+        if self.game_over and self.reward == 'PacmanEated':
+            self.gameOverFunc()
+            self.time_end_level = self.timer_game
+            self.win_streak = 0
+            return
+        if self.checkPlaytimeOver():
+            self.game_over = True
             self.reward = 'GameOver'
             self.gameOverFunc()
+            self.time_end_level = self.timer_game
+            self.win_streak = 0
             return
         self.level_timer += 1
-        self.timer_game += 1
         self.ghost_update_count += 1
         self.pacman_update_count += 1
         self.tictak_change_count += 1
@@ -238,22 +327,18 @@ class Game:
 
         if self.pacman_update_count == self.pacman_update_delay:
             self.pacman_update_count = 0
-            oldPosition = (self.pacman.row, self.pacman.col)
             self.pacman.update()
-            newPosition = (self.pacman.row, self.pacman.col)
             self.pacman.col %= len(game_board[0])
             if self.pacman.row % 1.0 == 0 and self.pacman.col % 1.0 == 0:
                 if game_board[int(self.pacman.row)][int(self.pacman.col)] == 2:
-                    game_board[int(self.pacman.row)][int(self.pacman.col)] = 7
-                    game_board[oldPosition[0]][oldPosition[1]] = 1
+                    game_board[int(self.pacman.row)][int(self.pacman.col)] = 1
                     self.score += 20
                     self.collected += 1
                     self.reward = 'TicTac'
                     # Fill tile with black
                     pygame.draw.rect(screen, (0, 0, 0), (self.pacman.col * square, self.pacman.row * square, square, square))
                 elif game_board[int(self.pacman.row)][int(self.pacman.col)] == 5 or game_board[int(self.pacman.row)][int(self.pacman.col)] == 6:
-                    game_board[int(self.pacman.row)][int(self.pacman.col)] = 7
-                    game_board[oldPosition[0]][oldPosition[1]] = 1
+                    game_board[int(self.pacman.row)][int(self.pacman.col)] = 1
                     self.collected += 1
                     # Fill tile with black
                     self.reward = 'BigTicTac'
@@ -265,9 +350,13 @@ class Game:
                         ghost.setAttacked(True)
                         ghost.setTarget()
                         self.ghosts_attacked = True
-                elif game_board[int(self.pacman.row)][int(self.pacman.col)] == 1:
-                    game_board[int(self.pacman.row)][int(self.pacman.col)] = 7
-                    game_board[oldPosition[0]][oldPosition[1]] = 1
+                elif game_board[int(self.pacman.row)][int(self.pacman.col)] == 8:
+                    game_board[int(self.pacman.row)][int(self.pacman.col)] = 1
+                    self.berry_state[2] = True
+                    self.reward = 'Berry'
+                    self.score += self.berry_score
+                    self.points.append([self.berry_location[0], self.berry_location[1], self.berry_score, 0])
+                    self.berries_collected.append(self.berries[(self.level - 1) % 8])
         self.checkSurroundings()
         self.high_score = max(self.score, self.high_score)
 
@@ -275,23 +364,17 @@ class Game:
         if self.collected == self.total:
             print("New Level")
             self.reward = 'Win'
+            self.win_streak += 1
             self.time_end_level = self.timer_game
             self.newLevel()
 
         self.softRender()
-    
-    def pause(self,time):
-        cur = 0
-        while not cur == time:
-            cur += 1
-        # Render method
 
     ## отрисовка поля точек призраков пакмана
     def render(self):
         screen.fill((0, 0, 0)) # Flushes the screen
         # Draws game elements
         currentTile = 0
-        self.displayLives()
         self.displayScore()
         for i in range(3, len(game_board) - 2):
             for j in range(len(game_board[0])):
@@ -342,7 +425,6 @@ class Game:
         self.pacman.draw()
         self.displayScore()
         self.displayBerries()
-        self.displayLives()
         # for point in pointsToDraw:
         #     self.drawPoints(point[0], point[1], point[2])
         self.drawBerry()
@@ -369,20 +451,16 @@ class Game:
         # Check if pacman got killed
         for ghost in self.ghosts:
             if self.touchingPacman(ghost.row, ghost.col) and not ghost.isAttacked():
-                if self.lives == 1:
-                    print("You lose")
-                    self.game_over = True
-                    #Removes the ghosts from the screen
-                    for ghost in self.ghosts:
-                        self.drawTilesAround(ghost.row, ghost.col)
-                    self.drawTilesAround(self.pacman.row, self.pacman.col)
-                    self.pacman.draw()
-                    pygame.display.update()
-                    self.pause(10000000)
-                    return
-                self.started = False
-                self.reward = 'LoseRound'
-                self.reset()
+                print("You lose")
+                self.game_over = True
+                #Removes the ghosts from the screen
+                for ghost in self.ghosts:
+                    self.drawTilesAround(ghost.row, ghost.col)
+                self.drawTilesAround(self.pacman.row, self.pacman.col)
+                self.pacman.draw()
+                self.reward = 'PacmanEated'
+                pygame.display.update()
+                return
             elif self.touchingPacman(ghost.row, ghost.col) and ghost.isAttacked() and not ghost.isDead():
                 ghost.setDead(True)
                 ghost.setTarget()
@@ -392,12 +470,7 @@ class Game:
                 self.score += self.ghost_score
                 self.points.append([ghost.row, ghost.col, self.ghost_score, 0])
                 self.ghost_score *= 2
-                self.pause(10000000)
-        if self.touchingPacman(self.berry_location[0], self.berry_location[1]) and not self.berry_state[2] and self.level_timer in range(self.berry_state[0], self.berry_state[1]):
-            self.berry_state[2] = True
-            self.score += self.berry_score
-            self.points.append([self.berry_location[0], self.berry_location[1], self.berry_score, 0])
-            self.berries_collected.append(self.berries[(self.level - 1) % 8])
+                self.reward = 'GhostEated' 
     # Displays the current score
     def displayScore(self):
         textOneUp = ["tile033.png", "tile021.png", "tile016.png"]
@@ -442,17 +515,20 @@ class Game:
     def drawBerry(self):
         if self.level_timer in range(self.berry_state[0], self.berry_state[1]) and not self.berry_state[2]:
             # print("here")
+            game_board[int(self.berry_location[0])][int(self.berry_location[1])] = 8
             berryImage = pygame.image.load(element_path + self.berries[(self.level - 1) % 8])
             berryImage = pygame.transform.scale(berryImage, (int(square * sprite_ratio), int(square * sprite_ratio)))
             screen.blit(berryImage, (self.berry_location[1] * square, self.berry_location[0] * square, square, square))
+        else:
+            game_board[int(self.berry_location[0])][int(self.berry_location[1])] = 1
     # Reset after death
     def reset(self):
-        # self.ghosts = [Ghost(14, 13, "red", 0), Ghost(17, 11, "blue", 1), Ghost(17, 13, "pink", 2), Ghost(17, 15, "orange", 3)]
+        #self.ghosts = [Ghost(14, 13, "red", 0), Ghost(17, 11, "blue", 1), Ghost(17, 13, "pink", 2), Ghost(17, 15, "orange", 3)]
         self.ghosts = []
         for ghost in self.ghosts:
             ghost.setTarget()
-        self.pacman = Pacman(26, 13)
-        self.lives -= 1
+        start_position = self.setStartPositionPacman()
+        self.pacman = Pacman(start_position[0],start_position[1])
         self.paused = True
         self.render()
 
@@ -490,15 +566,6 @@ class Game:
         pygame.display.update()
         self.game_over_counter += 1
 
-    def displayLives(self):
-        # 33 rows || 28 cols
-        # Lives[[31, 5], [31, 3], [31, 1]]
-        livesLoc = [[34, 3], [34, 1]]
-        for i in range(self.lives - 1):
-            lifeImage = pygame.image.load(element_path + "tile054.png")
-            lifeImage = pygame.transform.scale(lifeImage, (int(square * sprite_ratio), int(square * sprite_ratio)))
-            screen.blit(lifeImage, (livesLoc[i][1] * square, livesLoc[i][0] * square - sprite_offset, square, square))
-
     def displayBerries(self):
         firstBerrie = [34, 26]
         for i in range(len(self.berries_collected)):
@@ -520,8 +587,10 @@ class Game:
         return False
 
     def newLevel(self):
+        global game_board
+        game_board = copy.deepcopy(original_game_board)
         self.reset()
-        self.lives += 1
+        self.game_over = False
         self.collected = 0
         self.started = True
         self.berry_state = [200, 400, False]
@@ -537,13 +606,8 @@ class Game:
             state[0] = randrange(2)
             state[1] = randrange(self.levels[index][state[0]] + 1)
             index += 1
-        global game_board
-        game_board = copy.deepcopy(original_game_board)
         self.render()
-
-    def getIndexStateEnvFromCoordinat(self,state):
-        index = state[0] * self.number_states['col'] + state[1]
-        return index
+        
 
     def drawTilesAround(self, row, col):
         row = math.floor(row)
@@ -587,6 +651,7 @@ class Game:
             for j in range(len(original_game_board[0])):
                 if original_game_board[i][j] == 2 or original_game_board[i][j] == 5 or original_game_board[i][j] == 6:
                     total += 1
+        total -= 1 # - pacman
         return total
 
     def getHighScore(self):
@@ -606,7 +671,7 @@ class Pacman:
         self.row = row
         self.col = col
         self.mouthOpen = False
-        self.pacSpeed = 1
+        self.pacSpeed = 1/2
         self.mouth_change_delay = 5
         self.mouth_change_count = 0
         self.dir = 0 # 0: North, 1: East, 2: South, 3: West
@@ -620,9 +685,10 @@ class Pacman:
             return True
         if game_board[int(row)][int(col)] != 3:
             return True
+        
         self.reward = 'Wall'
         return False
-            
+
     def update(self):
         if self.newDir == 0:
             if self.canMove(math.floor(self.row - self.pacSpeed), self.col) and self.col % 1.0 == 0:
@@ -705,7 +771,7 @@ class Ghost:
         self.changeFeetCount = changeFeetCount
         self.changeFeetDelay = 5
         self.target = [-1, -1]
-        self.ghostSpeed = 1/4
+        self.ghostSpeed = 1/2
         self.lastLoc = [-1, -1]
         self.attackedTimer = 240
         self.attackedCount = 0
@@ -724,14 +790,13 @@ class Ghost:
             self.attackedCount += 1
 
         if self.attacked and not self.dead:
-            self.ghostSpeed = 1/8
+            self.ghostSpeed = 1/4
 
         if self.attackedCount == self.attackedTimer and self.attacked:
             if not self.dead:
-                self.ghostSpeed = 1/4
+                self.ghostSpeed = 1/2
                 self.row = math.floor(self.row)
                 self.col = math.floor(self.col)
-
             self.attackedCount = 0
             self.attacked = False
             self.setTarget()
@@ -742,7 +807,7 @@ class Ghost:
             if self.deathCount == self.deathTimer:
                 self.deathCount = 0
                 self.dead = False
-                self.ghostSpeed = 1/4
+                self.ghostSpeed = 1/2
 
     def draw(self): # Ghosts states: Alive, Attacked, Dead Attributes: Color, Direction, Location
         ghostImage = pygame.image.load(element_path + "tile152.png")
@@ -896,7 +961,7 @@ class Ghost:
             self.row += self.ghostSpeed
         elif self.dir == 3:
             self.col -= self.ghostSpeed
-
+        
         # Incase they go through the middle tunnel
         self.col = self.col % len(game_board[0])
         if self.col < 0:
@@ -943,7 +1008,11 @@ def start():
                 elif event.key == pygame.K_q:
                     running = False
                     game.recordHighScore()
-        print(f'{game.getStatePacman()} {game.pacman.newDir} {game.pacman.dir}')
+            game.writeGameBoard()
+        for ghost in game.ghosts:
+            print(f"ГОСТ {ghost.row} {ghost.col}")
+        print(f'Пакман {game.pacman.row} {game.pacman.col}')
+        print()
         game.update()
         i += 1
 
